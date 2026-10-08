@@ -55,6 +55,11 @@ namespace StationOrion
         public Light[] alarmLights = new Light[0];
         public Light room1Light, room2Light, room3Light, room3Danger, room3Success;
 
+        [Header("Realistic station (optional)")]
+        public RoomPower room1Power, room2Power, room3Power;
+        public DoorController podDoor;
+        public Behaviour[] podTeleport = new Behaviour[0];   // escape pod floor, unlocked at the end
+
         public Stage CurrentStage { get; private set; } = Stage.Intro;
 
         float timeLeft;
@@ -84,6 +89,8 @@ namespace StationOrion
             // Emergency lighting: rooms dim, red alarm lights on.
             Dim(room1Light, 0.3f); Dim(room2Light, 0.3f); Dim(room3Light, 0.3f);
             if (room3Success != null) room3Success.gameObject.SetActive(false);
+            foreach (var rp in new[] { room1Power, room2Power, room3Power }) if (rp != null) rp.SetPowered(false);
+            SetTeleport(podTeleport, false);
 
             // Lock the next rooms: you cannot teleport there until their door opens.
             SetTeleport(room2Teleport, false);
@@ -152,6 +159,7 @@ namespace StationOrion
                     SOAudio.PlayAt(SOAudio.Success, Head(), 0.8f);
                     ShowBanner("POWER RESTORED - Engine Room unlocked", 5f);
                     Restore(room1Light);
+                    if (room1Power != null) room1Power.PowerUp();
                     if (door1 != null) door1.Open();
                     SetTeleport(room2Teleport, true);
                     if (CoolantFilled() == coolantSockets.Length) { EnterStage(Stage.Access); return; }
@@ -161,6 +169,7 @@ namespace StationOrion
                     SOAudio.PlayAt(SOAudio.Success, Head(), 0.8f);
                     ShowBanner("COOLANT STABLE - shutdown code decoded on the wall", 6f);
                     Restore(room2Light);
+                    if (room2Power != null) room2Power.PowerUp();
                     if (codeNote != null && keypad != null)
                         codeNote.text = "REACTOR SHUTDOWN CODE\n<size=170%><color=#66FFAA>" + Spaced(keypad.Code) + "</color></size>\nRemember it!";
                     if (keycardSocket != null && keycardSocket.IsFilled) { EnterStage(Stage.Code); return; }
@@ -185,6 +194,9 @@ namespace StationOrion
                     ShowBanner("REACTOR STABLE - get into the ESCAPE POD!", 8f);
                     StopAlarm();
                     Restore(room3Light);
+                    if (room3Power != null) room3Power.PowerUp();
+                    if (podDoor != null) podDoor.Open();
+                    SetTeleport(podTeleport, true);
                     if (room3Danger != null) room3Danger.gameObject.SetActive(false);
                     if (room3Success != null) room3Success.gameObject.SetActive(true);
                     if (reactorCore != null) reactorCore.Set(new Color(0.2f, 0.7f, 1f), false);
@@ -447,9 +459,9 @@ namespace StationOrion
         {
             switch (st)
             {
-                case Stage.Power: return "The power cell is on the shelf. Point at it and hold GRIP, then let go above the yellow slot.";
+                case Stage.Power: return "The power cell is on the wall shelf. Point at it and hold GRIP, then let go above the yellow slot.";
                 case Stage.Coolant: return "Red goes on red, blue on blue, green on green. Follow the diamond.";
-                case Stage.Access: return "The keycard is on a crate in a corner. The scanner glows blue next to the next door.";
+                case Stage.Access: return "The keycard is on a crate in a corner. The scanner glows cyan on the wall beside the Reactor Room door.";
                 case Stage.Code: return "Forgot the code? Go back to the Engine Room and read the wall panel.";
                 case Stage.Shutdown: return "Point at the big red button and press GRIP.";
             }
