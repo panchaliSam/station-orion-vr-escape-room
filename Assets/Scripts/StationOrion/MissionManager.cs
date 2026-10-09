@@ -18,10 +18,10 @@ namespace StationOrion
     /// </summary>
     public class MissionManager : MonoBehaviour
     {
-        public enum Stage { Intro, Power, Coolant, Access, Code, Shutdown, Escape, Complete, Failed }
+        public enum Stage { Intro, Power, Coolant, Access, Code, Shutdown, Escape, Boarded, Launching, Complete, Failed }
 
         [Header("Timing")]
-        public float missionSeconds = 600f;
+        public float missionSeconds = 300f;   // 5 minutes
         public float introSeconds = 7f;
         [Tooltip("Show a hint if the player makes no progress for this long.")]
         public float hintAfterIdle = 25f;
@@ -59,6 +59,19 @@ namespace StationOrion
         public RoomPower room1Power, room2Power, room3Power;
         public DoorController podDoor;
         public Behaviour[] podTeleport = new Behaviour[0];   // escape pod floor, unlocked at the end
+
+        [Header("Ending (escape pod)")]
+        public PressButton launchButton;          // inside the pod: seals the hatch and launches
+        public TextMeshPro podDisplay;            // small screen inside the pod
+        public Light podLight;
+
+        [Header("Voice lines (optional)")]
+        public AudioClip introVoice, podReadyVoice, lifeSignsVoice, rebootVoice, homeVoice;
+        public AudioClip twoMinutesVoice, oneMinuteVoice, meltdownVoice, keypadLockedVoice;
+
+        [Header("Failure")]
+        [Tooltip("Seconds the meltdown screen stays up before the game restarts.")]
+        public float restartDelay = 15f;
 
         public Stage CurrentStage { get; private set; } = Stage.Intro;
 
@@ -117,8 +130,15 @@ namespace StationOrion
             foreach (var s in coolantSockets) if (s != null) { s.Filled += OnSocketFilled; s.Emptied += OnSocketEmptied; }
             if (keycardSocket != null) keycardSocket.Filled += OnSocketFilled;
             foreach (var s in AllSockets()) if (s != null) s.WrongItem += OnWrongItem;
-            if (keypad != null) { keypad.Solved += OnKeypadSolved; keypad.Message += m => ShowBanner(m, 4f); }
+            if (keypad != null)
+            {
+                keypad.Solved += OnKeypadSolved;
+                keypad.Message += m => ShowBanner(m, 4f);
+                keypad.LockedOut += () => SOAudio.PlayVoice(keypadLockedVoice, keypad.transform.position);
+            }
             if (emergencyButton != null) emergencyButton.Pressed += OnEmergencyPressed;
+            if (launchButton != null) launchButton.Pressed += OnLaunchPressed;
+            if (podDisplay != null) podDisplay.text = "<b>LIFEBOAT 1</b>\n<size=70%><color=#AAAAAA>STANDBY</color></size>";
 
             if (codeNote != null) codeNote.text = "REACTOR SHUTDOWN CODE\n<color=#888888>[ ENCRYPTED ]\nStabilise the coolant to decode</color>";
 
@@ -129,6 +149,12 @@ namespace StationOrion
         {
             CurrentStage = Stage.Intro;
             UpdateDisplays(true);
+            if (introVoice != null)
+            {
+                SOAudio.PlayAt(SOAudio.Chime, ScreenPos(), 0.8f);
+                yield return new WaitForSeconds(0.8f);
+                SOAudio.PlayVoice(introVoice, ScreenPos());
+            }
             yield return new WaitForSeconds(introSeconds);
             EnterStage(Stage.Power);
         }
@@ -207,13 +233,27 @@ namespace StationOrion
                     if (eb != null) eb.Set(new Color(0.2f, 1f, 0.3f), false);
                     break;
 
+                case Stage.Boarded:
+                    if (launchButton == null) { EnterStage(Stage.Complete); return; }
+                    SOAudio.PlayAt(SOAudio.Chime, launchButton.transform.position, 0.8f);
+                    SOAudio.PlayVoice(podReadyVoice, launchButton.transform.position);
+                    var lg = launchButton.GetComponent<Glow>();
+                    if (lg != null) lg.Set(new Color(0.2f, 1f, 0.35f), true);
+                    if (podDisplay != null) podDisplay.text = "<b>LIFEBOAT 1</b>\n<color=#55FF88>READY</color>\n<size=70%>Press the green LAUNCH button</size>";
+                    break;
+
+                case Stage.Launching:
+                    StartCoroutine(LaunchSequence());
+                    break;
+
                 case Stage.Complete:
                     SOAudio.PlayAt(SOAudio.Success, Head(), 1f);
                     if (escapePodGlow != null) escapePodGlow.Set(new Color(0.2f, 1f, 0.4f), false);
+                    restartAllowedAt = Time.time + 6f;
                     break;
 
                 case Stage.Failed:
-                    StartCoroutine(RestartAfter(10f));
+                    StartCoroutine(MeltdownSequence());
                     break;
             }
             UpdateTargets();
@@ -277,7 +317,9 @@ namespace StationOrion
             bool running = CurrentStage >= Stage.Power && CurrentStage <= Stage.Escape;
             if (running)
             {
+                float before = timeLeft;
                 timeLeft -= Time.deltaTime;
+                TimeWarnings(before, timeLeft);
                 if (timeLeft <= 0f) { timeLeft = 0f; EnterStage(Stage.Failed); }
             }
 
@@ -285,7 +327,7 @@ namespace StationOrion
             {
                 Bounds b = escapePodZone.bounds;
                 b.Expand(new Vector3(0.1f, 4f, 0.1f));
-                if (b.Contains(HeadTransform().position)) EnterStage(Stage.Complete);
+                if (b.Contains(HeadTransform().position)) EnterStage(Stage.Boarded);
             }
 
             // Idle hint: if nothing happened for a while, help the player.
@@ -344,6 +386,7 @@ namespace StationOrion
                 case Stage.Code: return keypad != null ? keypad.transform : null;
                 case Stage.Shutdown: return emergencyButton != null ? emergencyButton.transform : null;
                 case Stage.Escape: return escapePodZone != null ? escapePodZone.transform : null;
+                case Stage.Boarded: return launchButton != null ? launchButton.transform : null;
             }
             return null;
         }
@@ -372,7 +415,7 @@ namespace StationOrion
                 Vector3.Distance(HeadTransform().position, codeNote.transform.position) < 2.2f)
                 seenCode = true;
 
-            Transform t = (CurrentStage >= Stage.Power && CurrentStage <= Stage.Escape) ? PickTarget() : null;
+            Transform t = (CurrentStage >= Stage.Power && CurrentStage <= Stage.Boarded) ? PickTarget() : null;
 
             // make the current item glow
             Glow g = null;
@@ -426,18 +469,26 @@ namespace StationOrion
                        "<color=#88CCFF>Starting in a moment...</color>";
 
             if (CurrentStage == Stage.Complete)
-                return "<size=130%><color=#55FF88><b>MISSION COMPLETE</b></color></size>\n\n" +
-                       "You escaped Station Orion with\n<size=150%><b>" + timer + "</b></size> to spare.\n\n" +
-                       "<size=80%><color=#AAAAAA>Thanks for playing. Press F5 to play again.</color></size>";
+                return "<size=130%><color=#55FF88><b>MISSION ACCOMPLISHED</b></color></size>\n\n" +
+                       "You escaped Station Orion with\n<size=150%><b>" + timer + "</b></size> to spare.\nLifeboat 1 is on course for Earth.\n\n" +
+                       "<size=80%><color=#AAAAAA>Thanks for playing. Press LAUNCH again (or F5) to play again.</color></size>";
+
+            if (CurrentStage == Stage.Launching)
+                return "<size=130%><color=#55FF88><b>LAUNCH SEQUENCE</b></color></size>\n\nHatch sealed. Rebooting lifeboat systems...";
 
             if (CurrentStage == Stage.Failed)
-                return "<size=130%><color=#FF3333><b>REACTOR MELTDOWN</b></color></size>\n\n" +
-                       "The station was lost.\nRestarting in a few seconds...";
+                return "<size=130%><color=#FF3333><b>REACTOR MELTDOWN</b></color></size>\n" +
+                       "<color=#FF3333>MISSION FAILED</color>\n\n" +
+                       "Time ran out before the reactor was shut down.\nThe station was lost.\n\n" +
+                       "<size=80%>You completed: <b>" + Progress() + "</b></size>\n\n" +
+                       "<color=#FFB347>Restarting in " + Mathf.CeilToInt(Mathf.Max(0f, restartAt - Time.time)) + " s</color>\n" +
+                       "<size=70%><color=#AAAAAA>(press F5 or the emergency button to restart now)</color></size>";
 
             string s = "<color=" + timerColor + "><size=150%><b>" + timer + "</b></size></color>\n";
             if (Time.time < bannerUntil && banner != "") s += "<color=#FFFF66>" + banner + "</color>\n";
             s += "\n<b>OBJECTIVE</b>\n" + Objective(CurrentStage) + "\n\n" + Checklist();
             if (hint != "") s += "\n<size=85%><color=#88DDFF>HINT: " + hint + "</color></size>";
+            s += "\n<size=65%><color=#888888>Keyboard: right-mouse look \u2022 WASD move \u2022 G grab \u2022 F5 restart</color></size>";
             return s;
         }
 
@@ -451,6 +502,7 @@ namespace StationOrion
                 case Stage.Code: return "Enter the 4-digit shutdown code on the keypad in the Reactor Room.";
                 case Stage.Shutdown: return "Press the red <color=#FF5555>EMERGENCY SHUTDOWN</color> button.";
                 case Stage.Escape: return "Reactor stable! Get into the <color=#55FF88>ESCAPE POD</color>.";
+                case Stage.Boarded: return "Press the green <color=#55FF88>LAUNCH</color> button inside the pod to seal the hatch.";
             }
             return "";
         }
@@ -464,6 +516,7 @@ namespace StationOrion
                 case Stage.Access: return "The keycard is on a crate in a corner. The scanner glows cyan on the wall beside the Reactor Room door.";
                 case Stage.Code: return "Forgot the code? Go back to the Engine Room and read the wall panel.";
                 case Stage.Shutdown: return "Point at the big red button and press GRIP.";
+                case Stage.Boarded: return "Point at the green LAUNCH button in the middle of the pod and press GRIP.";
             }
             return "";
         }
@@ -474,7 +527,8 @@ namespace StationOrion
                    Line("Coolant " + CoolantFilled() + "/" + (coolantSockets != null ? coolantSockets.Length : 3), CurrentStage > Stage.Coolant) +
                    Line("Access", CurrentStage > Stage.Access) +
                    Line("Shutdown code", CurrentStage > Stage.Code) +
-                   Line("Reactor", CurrentStage > Stage.Shutdown);
+                   Line("Reactor", CurrentStage > Stage.Shutdown) +
+                   Line("Escape pod", CurrentStage > Stage.Boarded);
         }
 
         static string Line(string label, bool done)
@@ -494,6 +548,83 @@ namespace StationOrion
             string r = "";
             foreach (char c in code) r += c + " ";
             return r.Trim();
+        }
+
+        // ------------------------------------------------------------ ending
+
+        float restartAllowedAt = float.MaxValue;
+        AudioSource rumbleSource;
+
+        void OnLaunchPressed(PressButton b)
+        {
+            if (CurrentStage == Stage.Complete)
+            {
+                if (Time.time >= restartAllowedAt) Restart();
+                return;
+            }
+            if (CurrentStage != Stage.Boarded)
+            {
+                SOAudio.PlayAt(SOAudio.Error, b.transform.position, 0.8f);
+                ShowBanner("Lifeboat locked - shut down the reactor first", 4f);
+                return;
+            }
+            EnterStage(Stage.Launching);
+        }
+
+        IEnumerator LaunchSequence()
+        {
+            Vector3 at = launchButton != null ? launchButton.transform.position : Head();
+            var lg = launchButton != null ? launchButton.GetComponent<Glow>() : null;
+            if (lg != null) lg.Set(new Color(0.2f, 1f, 0.35f), false);
+
+            // 1. seal the hatch
+            SetTeleport(podTeleport, false);
+            if (podDoor != null) podDoor.Close();
+            PodText("<b>LIFEBOAT 1</b>\n<color=#FFB347>SEALING HATCH</color>");
+            yield return new WaitForSeconds(1.6f);
+
+            // 2. life signs
+            SOAudio.PlayAt(SOAudio.Chime, at, 0.8f);
+            yield return new WaitForSeconds(0.7f);
+            PodText("<b>LIFE SIGNS DETECTED: 1</b>\n<color=#55FF88>HATCH SEALED</color>");
+            yield return Wait(SOAudio.PlayVoice(lifeSignsVoice, at), 2.5f);
+
+            // 3. reboot: lights drop, rumble starts, progress bar
+            if (podLight != null) podLight.color = new Color(1f, 0.55f, 0.3f);
+            rumbleSource = SOAudio.AddLoop(gameObject, SOAudio.Rumble, 0.55f);
+            rumbleSource.spatialBlend = 0f;
+            rumbleSource.Play();
+            float voice = SOAudio.PlayVoice(rebootVoice, at);
+            float dur = Mathf.Max(voice, 4f);
+            for (float t = 0f; t < dur; t += 0.2f)
+            {
+                int filled = Mathf.Clamp(Mathf.RoundToInt(t / dur * 16f), 0, 16);
+                PodText("<b>SYSTEM REBOOT</b>\n<color=#7FE8FF>" + new string('|', filled) + "</color><color=#333333>" + new string('|', 16 - filled) +
+                        "</color>\n<size=70%>" + (t < dur * 0.5f ? "Navigation..." : "Course set: <b>EARTH</b>") + "</size>");
+                if (podLight != null) podLight.intensity = Mathf.Lerp(0.6f, 1.6f, Mathf.PingPong(t * 3f, 1f));
+                yield return new WaitForSeconds(0.2f);
+            }
+            if (podLight != null) { podLight.color = new Color(0.75f, 0.9f, 1f); podLight.intensity = 1.6f; }
+
+            // 4. detach + welcome home
+            PodText("<b>DETACHING</b>\n<size=80%>from Station Orion</size>\n<color=#55FF88>COURSE: EARTH</color>");
+            yield return Wait(SOAudio.PlayVoice(homeVoice, at), 3f);
+            if (rumbleSource != null) rumbleSource.volume = 0.25f;
+            PodText("<color=#55FF88><b>MISSION\nACCOMPLISHED</b></color>\n<size=70%>Welcome home, engineer</size>");
+            EnterStage(Stage.Complete);
+        }
+
+        static IEnumerator Wait(float voiceLength, float atLeast)
+        {
+            yield return new WaitForSeconds(Mathf.Max(voiceLength, atLeast) + 0.3f);
+        }
+
+        void PodText(string t) { if (podDisplay != null) podDisplay.text = t; }
+
+        Vector3 ScreenPos()
+        {
+            if (displays != null) foreach (var d in displays) if (d != null) return d.transform.position;
+            return Head();
         }
 
         // ------------------------------------------------------------ helpers
@@ -521,10 +652,77 @@ namespace StationOrion
             foreach (var l in alarmLights) if (l != null) l.enabled = false;
         }
 
-        IEnumerator RestartAfter(float seconds)
+        // ------------------------------------------------------------ time warnings + meltdown (the "lose" ending)
+
+        bool warned120, warned60;
+        float restartAt = float.MaxValue;
+
+        void TimeWarnings(float before, float now)
         {
-            foreach (var src in alarmSources) if (src != null) src.pitch = 1.4f;
-            yield return new WaitForSeconds(seconds);
+            if (!warned120 && before > 120f && now <= 120f && missionSeconds > 150f)
+            {
+                warned120 = true;
+                SOAudio.PlayVoice(twoMinutesVoice, ScreenPos());
+                ShowBanner("WARNING: 2 minutes to meltdown", 5f);
+            }
+            if (!warned60 && before > 60f && now <= 60f)
+            {
+                warned60 = true;
+                SOAudio.PlayVoice(oneMinuteVoice, ScreenPos());
+                ShowBanner("WARNING: 1 minute to meltdown!", 6f);
+                foreach (var src in alarmSources) if (src != null) { src.pitch = 1.25f; src.volume = 0.35f; }
+            }
+            // last 10 seconds: a beep every second
+            if (now <= 10f && now > 0f && Mathf.CeilToInt(before) != Mathf.CeilToInt(now))
+                SOAudio.PlayAt(SOAudio.Beep, Head() + Vector3.up * 0.3f, 1f);
+        }
+
+        string Progress()
+        {
+            if (CurrentStage != Stage.Failed) return "";
+            int done = 0;
+            if (powerSocket != null && powerSocket.IsFilled) done++;
+            done += CoolantFilled();
+            if (keycardSocket != null && keycardSocket.IsFilled) done++;
+            if (keypad != null && keypad.IsSolved) done++;
+            int total = 1 + (coolantSockets != null ? coolantSockets.Length : 3) + 2;
+            return done + " of " + total + " repairs";
+        }
+
+        IEnumerator MeltdownSequence()
+        {
+            restartAt = Time.time + restartDelay;
+            if (emergencyButton != null) emergencyButton.Pressed += b => { if (CurrentStage == Stage.Failed) Restart(); };
+
+            // 1. alarms go frantic, the core flares white-hot, rumble starts
+            foreach (var src in alarmSources) if (src != null) { src.pitch = 1.6f; src.volume = 0.45f; }
+            if (reactorCore != null) { reactorCore.intensity = 4f; reactorCore.Set(new Color(1f, 0.85f, 0.6f), true); reactorCore.pulseSpeed = 14f; }
+            if (reactorRing != null) reactorRing.speedMultiplier = 3f;
+            if (humSource != null) humSource.pitch = 1.5f;
+            var rumble = SOAudio.AddLoop(gameObject, SOAudio.Rumble, 0.6f);
+            rumble.spatialBlend = 0f;
+            rumble.Play();
+            SOAudio.PlayAt(SOAudio.Error, Head(), 1f);
+            yield return new WaitForSeconds(0.6f);
+            SOAudio.PlayVoice(meltdownVoice, ScreenPos());
+
+            // 2. every room light turns red and flickers
+            var all = Object.FindObjectsByType<Light>();
+            float t0 = Time.time;
+            while (Time.time < restartAt)
+            {
+                float k = 0.35f + 0.65f * Mathf.PerlinNoise(Time.time * 6f, 0.3f);
+                foreach (var l in all)
+                {
+                    if (l == null || l.type == LightType.Directional) continue;
+                    l.color = Color.Lerp(l.color, new Color(1f, 0.12f, 0.05f), Time.deltaTime * 2f);
+                    if (!baseIntensity.ContainsKey(l)) baseIntensity[l] = l.intensity;
+                    l.intensity = baseIntensity[l] * k;
+                }
+                if (Time.time - t0 > restartDelay * 0.6f) rumble.volume = Mathf.Lerp(0.6f, 1f, (Time.time - t0) / restartDelay);
+                UpdateDisplays(false);
+                yield return null;
+            }
             Restart();
         }
 

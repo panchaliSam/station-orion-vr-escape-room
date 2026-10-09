@@ -34,7 +34,7 @@ namespace StationOrion.EditorTools
         {
             // ------------------------------------------------------------ shell
             var A = Room("CommandDeck", -4f, 4f, -4f, 4f, 3.2f,
-                north: new[] { DoorOp(4f), ClearOp(1.55f, 2.3f), ClearOp(6.45f, 1.9f) },
+                north: new[] { DoorOp(4f), ClearOp(1.55f, 2.3f), ClearOp(6.45f, 2.6f) },
                 south: new[] { ClearOp(2.0f, 3.0f), ClearOp(6.2f, 1.8f) },
                 east: new[] { ClearOp(2.8f, 1.4f), ClearOp(6.2f, 1.2f) },
                 west: new[] { WinOp(4f, 5.2f, 0.9f, 2.5f) });
@@ -143,6 +143,10 @@ namespace StationOrion.EditorTools
             mgr.room1Power = powerA;
             mgr.room2Power = powerB;
             mgr.room3Power = powerC;
+            mgr.launchButton = launchCache;
+            mgr.podDisplay = podDisplayCache;
+            mgr.podLight = podLight;
+            AssignVoices(mgr);
             Selection.activeGameObject = mgrGo;
         }
 
@@ -198,13 +202,7 @@ namespace StationOrion.EditorTools
 
             // main mission screen + how to play (north wall, visible from the start position)
             res.display = WallDisplay("Display_CommandDeck", t, new Vector3(-2.45f, 1.75f, 4f), Vector3.back, new Vector2(2.1f, 1.2f), 1.4f);
-            WallDisplay("HowToPlay", t, new Vector3(2.45f, 1.75f, 4f), Vector3.back, new Vector2(1.7f, 1.2f), 1.0f,
-                "<b><color=#7FE8FF>HOW TO PLAY</color></b>\n<size=75%><align=left>" +
-                "<b>TELEPORT</b>  aim at the floor and release\n" +
-                "<b>GRAB</b>  point at an object, hold GRIP\n" +
-                "<b>DROP / PLACE</b>  let go of GRIP over the slot\n" +
-                "<b>PRESS BUTTONS</b>  point + GRIP\n\n" +
-                "Follow the floating <color=#7FE8FF>cyan diamond</color>.\nThe screens show your objective and the reactor timer.</align></size>");
+            WallDisplay("HowToPlay", t, new Vector3(2.45f, 1.75f, 4f), Vector3.back, new Vector2(2.3f, 1.35f), 1.0f, ControlsText);
             Box("FloorHazard", t, new Vector3(0f, 0.003f, 3.75f), new Vector3(1.9f, 0.006f, 0.3f), M.hazard, false, 0.5f);
 
             // east wall: spare-parts rack with the power cell
@@ -344,15 +342,10 @@ namespace StationOrion.EditorTools
             };
             res.keycard = Keycard(t, new Vector3(3.3f, 0.7f + 0.01f, 8.75f), Quaternion.Euler(90f, 25f, 0f));
 
-            // ID scanner beside door 2 (east wall)
-            Box("ScannerHousing", t, new Vector3(3.965f, 1.42f, 13.35f), new Vector3(0.07f, 0.42f, 0.3f), M.trim, false, 0f);
-            var spad = Box("ScannerPad", t, new Vector3(3.925f, 1.44f, 13.35f), new Vector3(0.012f, 0.2f, 0.16f), M.scannerPad, false, 0f);
-            AddGlow(spad, Cyan, 2f);
-            Box("ScannerLightBar", t, new Vector3(3.925f, 1.255f, 13.35f), new Vector3(0.012f, 0.025f, 0.2f), M.stripCyan, false, 0f);
-            var ksock = MakeSocket("Socket_Keycard", t, new Vector3(3.9f, 1.44f, 13.35f), Quaternion.LookRotation(Vector3.right), "Keycard");
-            res.keycardTask = MakeTask(ksock, "ID Keycard", Cyan, spad.GetComponent<Renderer>(), res.keycard);
-            PointLight("ScannerLight", t, new Vector3(3.6f, 1.6f, 13.35f), Cyan, 1.0f, 1.6f);
-            Label(t, "ID SCANNER", new Vector3(3.72f, 1.85f, 13.35f), 0.8f, Cyan);
+            // ID scanner: a free-standing pedestal beside door 2, visible from the whole room
+            Renderer spad;
+            var ksock = ScannerPedestal(t, new Vector3(3.15f, 0f, 13.5f), out spad);
+            res.keycardTask = MakeTask(ksock, "ID Keycard", Cyan, spad, res.keycard);
 
             Box("FloorHazard", t, new Vector3(3.75f, 0.003f, 12f), new Vector3(0.3f, 0.006f, 1.9f), M.hazard, false, 0.5f);
             Pipe("Pipe", t, new Vector3(3.85f, 3.15f, 8f), new Vector3(3.85f, 3.15f, 16f), 0.05f, M.metal);
@@ -464,7 +457,7 @@ namespace StationOrion.EditorTools
                 "Built with Unity 6 (URP), XR Interaction Toolkit 3.5 and OpenXR.\n" +
                 "All 3D geometry, textures, the Earth and star sky, and all sound effects\nare generated procedurally in code - no third-party assets.\n" +
                 "Font: Liberation Sans (TextMesh Pro, SIL Open Font License).\n" +
-                "AI assistance: Claude (Anthropic) helped write C# scripts - see report.\n\nTEAM: add your names here</size>");
+                "AI assistance: Claude (Anthropic) helped write C# scripts - see report.\n" + VoiceCredit + "\n\nTEAM: add your names here</size>");
 
             // escape pod beacon above the hatch (MissionManager turns it green at the end)
             var beacon = Box("EscapePodBeacon", t, new Vector3(17.9f, 2.75f, 12f), new Vector3(0.04f, 0.1f, 1.6f), M.orange, false, 0f);
@@ -482,8 +475,7 @@ namespace StationOrion.EditorTools
             Box("PodStripe", t, new Vector3(19.5f, 1.2f, 10.92f), new Vector3(2.6f, 0.12f, 0.03f), M.orange, false, 1f);
             Box("PodPanel", t, new Vector3(20.72f, 0.75f, 12f), new Vector3(0.12f, 0.35f, 0.9f), M.trim, true, 0f);
             Box("PodPanelLights", t, new Vector3(20.655f, 0.8f, 12f), new Vector3(0.01f, 0.05f, 0.6f), M.glowGreen, false, 0f);
-            Text("PodSign", t, new Vector3(20.78f, 1.95f, 12f), Quaternion.LookRotation(Vector3.right), new Vector2(1.2f, 0.2f),
-                 "LIFEBOAT 1", 0.8f, Orange);
+            launchCache = PodLaunch(t, new Vector3(19.75f, 0f, 12f), true, out podDisplayCache);
             var zone = Node("EscapePodZone", t, new Vector3(19.6f, 1.15f, 12f), Quaternion.identity);
             var bc = zone.AddComponent<BoxCollider>();
             bc.isTrigger = true;
@@ -492,6 +484,8 @@ namespace StationOrion.EditorTools
         }
 
         static Collider podZoneCache;
+        static PressButton launchCache;
+        static TextMeshPro podDisplayCache;
 
         // ================================================================ items
 
@@ -690,6 +684,8 @@ namespace StationOrion.EditorTools
             {
                 cam.farClipPlane = 1500f;
                 PrefabUtility.RecordPrefabInstancePropertyModifications(cam);
+                if (cam.CompareTag("MainCamera") && cam.GetComponent<HeadCollision>() == null)
+                    cam.gameObject.AddComponent<HeadCollision>();   // head can't pass through walls
                 var acd = cam.GetComponent<UniversalAdditionalCameraData>();
                 if (acd != null)
                 {

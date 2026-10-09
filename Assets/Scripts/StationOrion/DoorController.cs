@@ -52,7 +52,13 @@ namespace StationOrion
         }
 
         [ContextMenu("Close door")]
-        public void Close() { isOpen = false; RefreshStatus(); }
+        public void Close()
+        {
+            if (!isOpen) return;
+            isOpen = false;
+            SOAudio.PlayAt(SOAudio.Door, transform.position + Vector3.up, 0.9f);
+            RefreshStatus();
+        }
 
         void RefreshStatus()
         {
