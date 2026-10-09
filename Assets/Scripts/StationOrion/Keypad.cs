@@ -16,6 +16,10 @@ namespace StationOrion
         public int codeLength = 4;
         [Tooltip("Leave empty for a random code each game.")]
         public string fixedCode = "";
+        [Tooltip("Wrong codes allowed before the keypad locks itself.")]
+        public int maxAttempts = 5;
+        [Tooltip("How long the keypad stays locked after too many wrong codes (seconds).")]
+        public float lockoutSeconds = 15f;
 
         public string Code { get; private set; }
         public bool Locked { get; set; } = true;
@@ -23,9 +27,14 @@ namespace StationOrion
 
         public System.Action Solved;
         public System.Action<string> Message;   // tells MissionManager what happened
+        public System.Action LockedOut;         // too many wrong codes
+        public bool IsLockedOut => Time.time < lockedUntil;
 
         string entry = "";
         bool busy;
+        int wrongAttempts;
+        float lockedUntil = -1f;
+        int lastShownSecond = -1;
 
         void Awake()
         {
@@ -47,6 +56,12 @@ namespace StationOrion
         void OnKey(PressButton b)
         {
             if (IsSolved || busy) return;
+            if (IsLockedOut)
+            {
+                SOAudio.PlayAt(SOAudio.Error, transform.position, 0.5f);
+                Message?.Invoke("Keypad locked - wait " + Mathf.CeilToInt(lockedUntil - Time.time) + " s");
+                return;
+            }
             if (Locked)
             {
                 SOAudio.PlayAt(SOAudio.Error, transform.position, 0.6f);
@@ -73,11 +88,23 @@ namespace StationOrion
             }
             else
             {
+                wrongAttempts++;
+                int left = maxAttempts - wrongAttempts;
                 SOAudio.PlayAt(SOAudio.Error, transform.position, 0.8f);
-                Message?.Invoke("Wrong code. The code was shown in the Engine Room.");
-                yield return Flash("DENIED", Color.red);
                 entry = "";
-                Show();
+                if (left <= 0)
+                {
+                    wrongAttempts = 0;
+                    lockedUntil = Time.time + lockoutSeconds;
+                    Message?.Invoke("Too many wrong codes - keypad locked for " + Mathf.RoundToInt(lockoutSeconds) + " seconds");
+                    LockedOut?.Invoke();
+                }
+                else
+                {
+                    Message?.Invoke("Wrong code (" + left + (left == 1 ? " try" : " tries") + " left before lockout). The code is on the Engine Room panel.");
+                    yield return Flash("DENIED  " + left + " LEFT", Color.red);
+                    Show();
+                }
             }
             busy = false;
         }
@@ -89,9 +116,32 @@ namespace StationOrion
             Show();
         }
 
+        void Update()
+        {
+            if (IsSolved || lockedUntil < 0f) return;
+            if (IsLockedOut)
+            {
+                int sec = Mathf.CeilToInt(lockedUntil - Time.time);
+                if (sec != lastShownSecond)
+                {
+                    lastShownSecond = sec;
+                    SetDisplay("LOCKED  " + sec + "s", Color.Lerp(Color.red, new Color(1f, 0.6f, 0.2f), (sec % 2)));
+                }
+            }
+            else
+            {
+                lockedUntil = -1f;
+                lastShownSecond = -1;
+                SOAudio.PlayAt(SOAudio.Beep, transform.position, 0.8f);
+                Message?.Invoke("Keypad unlocked - try again");
+                Show();
+            }
+        }
+
         void Show()
         {
             if (IsSolved) return;
+            if (IsLockedOut) return;
             if (Locked) { SetDisplay("LOCKED", new Color(1f, 0.4f, 0.3f)); return; }
             string s = "";
             for (int i = 0; i < codeLength; i++) s += i < entry.Length ? entry[i] + " " : "_ ";
