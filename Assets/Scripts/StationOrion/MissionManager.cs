@@ -381,9 +381,11 @@ namespace StationOrion
                             return ItemOrSocket(i < canisters.Length ? canisters[i] : null, coolantSockets[i]);
                     return null;
                 case Stage.Access:
-                    if (codeNote != null && !seenCode) return codeNote.transform;
+                    // the keycard is marked from the start of this stage; the code note comes next
                     return ItemOrSocket(keycard, keycardSocket);
-                case Stage.Code: return keypad != null ? keypad.transform : null;
+                case Stage.Code:
+                    if (codeNote != null && !seenCode) return codeNote.transform;
+                    return keypad != null ? keypad.transform : null;
                 case Stage.Shutdown: return emergencyButton != null ? emergencyButton.transform : null;
                 case Stage.Escape: return escapePodZone != null ? escapePodZone.transform : null;
                 case Stage.Boarded: return launchButton != null ? launchButton.transform : null;
@@ -411,7 +413,7 @@ namespace StationOrion
         void MoveMarker()
         {
             // the code note counts as "seen" once the player gets close to it
-            if (CurrentStage == Stage.Access && !seenCode && codeNote != null && HeadTransform() != null &&
+            if ((CurrentStage == Stage.Access || CurrentStage == Stage.Code) && !seenCode && codeNote != null && HeadTransform() != null &&
                 Vector3.Distance(HeadTransform().position, codeNote.transform.position) < 2.2f)
                 seenCode = true;
 
@@ -498,7 +500,7 @@ namespace StationOrion
             {
                 case Stage.Power: return "Restore power: put the glowing <color=#FFE14D>YELLOW power cell</color> on the yellow slot.";
                 case Stage.Coolant: return "Cool the reactor: put each canister on the pad of the <b>same colour</b> (" + CoolantFilled() + "/" + coolantSockets.Length + ").";
-                case Stage.Access: return "Read the shutdown code on the wall, then place the <color=#7FE8FF>ID keycard</color> on the scanner by the next door.";
+                case Stage.Access: return "Place the <color=#7FE8FF>ID keycard</color> on the scanner by the next door. Note the shutdown code on the wall.";
                 case Stage.Code: return "Enter the 4-digit shutdown code on the keypad in the Reactor Room.";
                 case Stage.Shutdown: return "Press the red <color=#FF5555>EMERGENCY SHUTDOWN</color> button.";
                 case Stage.Escape: return "Reactor stable! Get into the <color=#55FF88>ESCAPE POD</color>.";
@@ -513,7 +515,7 @@ namespace StationOrion
             {
                 case Stage.Power: return "The power cell is on the wall shelf. Point at it and hold GRIP, then let go above the yellow slot.";
                 case Stage.Coolant: return "Red goes on red, blue on blue, green on green. Follow the diamond.";
-                case Stage.Access: return "The keycard is on a crate in a corner. The scanner glows cyan on the wall beside the Reactor Room door.";
+                case Stage.Access: return "Follow the cyan diamond to the keycard, then put it on the scanner pedestal beside the Reactor Room door.";
                 case Stage.Code: return "Forgot the code? Go back to the Engine Room and read the wall panel.";
                 case Stage.Shutdown: return "Point at the big red button and press GRIP.";
                 case Stage.Boarded: return "Point at the green LAUNCH button in the middle of the pod and press GRIP.";
@@ -729,6 +731,7 @@ namespace StationOrion
         public void Restart()
         {
             // The setup tool adds this scene to File > Build Profiles, which is required for reloading.
+            PlayerSpawn.BeforeRestart();   // gives the XR Interaction Simulator a clean start too
             SceneManager.LoadScene(SceneManager.GetActiveScene().name);
         }
     }
