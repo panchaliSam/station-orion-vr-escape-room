@@ -5,13 +5,13 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/Main_StationOrion.unity
     guid: bdcfa9d05956a564dbbcb2b2e4d7acb3
   - enabled: 1
     path: Assets/Scenes/StationOrion_Realistic.unity
     guid: 4bd63e46fb92a754d856fa701cb38115
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/SampleScene.unity
     guid: 55daccc09a3b69647bbab145b54a3ab3
   m_configObjects:
